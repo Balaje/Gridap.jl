@@ -137,7 +137,7 @@ function change_domain(a::CellField,::ReferenceDomain,trian::Triangulation,::Ref
     return a
   elseif have_compatible_domains(
     trian_a,get_background_triangulation(trian)) || have_compatible_domains(
-    get_background_triangulation(trian_a),get_background_triangulation(trian))
+      get_background_triangulation(trian_a),get_background_triangulation(trian))
 
     cell_id = get_cell_to_bgcell(trian,trian_a)
     @assert ! isa(cell_id,SkeletonPair)
@@ -146,10 +146,10 @@ function change_domain(a::CellField,::ReferenceDomain,trian::Triangulation,::Ref
     cell_field = lazy_map(Broadcasting(∘),cell_a_q,cell_s2q)
     GenericCellField(cell_field,trian,ReferenceDomain())
   elseif have_compatible_domains(
-      trian_a,get_background_triangulation(get_background_triangulation(trian)))
-      bg_trian = get_background_triangulation(trian)
-      bg_a = change_domain(a,bg_trian,DomainStyle(a))
-      change_domain(bg_a,trian,DomainStyle(a))
+    trian_a,get_background_triangulation(get_background_triangulation(trian)))
+    bg_trian = get_background_triangulation(trian)
+    bg_a = change_domain(a,bg_trian,DomainStyle(a))
+    change_domain(bg_a,trian,DomainStyle(a))
   else
     @unreachable """\n
     We cannot move the given CellField to the reference domain of the requested triangulation.
@@ -257,16 +257,19 @@ function _point_to_cell_cache(trian::Triangulation)
   vertex_coordinates = Geometry.get_vertex_coordinates(topo)
   kdtree = KDTree(map(nc -> SVector(Tuple(nc)), vertex_coordinates))
   D = num_cell_dims(trian)
+  num_pt_dims = num_point_dims(trian)
   vertex_to_cells = get_faces(topo, 0, D)
   cell_to_ctype = get_cell_type(trian)
   ctype_to_reffe = get_reffes(trian)
   ctype_to_polytope = map(get_polytope, ctype_to_reffe)
   cell_map = get_cell_map(trian)
-  cache1 = kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map
+  cell_normal = (num_pt_dims ≥ 3) ? get_data(get_normal_vector(trian)) : cell_map # To return something else
+  cell_coords = get_cell_coordinates(trian)
+  cache1 = kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map, cell_normal, cell_coords, num_pt_dims, D
 end
 
 function _point_to_cell!(cache, x::Point)
-  kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map = cache
+  kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map, cell_normal, cell_coords, num_pt_dims, D = cache
 
   # Find nearest vertex
   id,dist = nn(kdtree, SVector(Tuple(x)))
@@ -289,7 +292,19 @@ function _point_to_cell!(cache, x::Point)
     polytope = ctype_to_polytope[ctype]
     cmap = cell_map[cell]
     inv_cmap = inverse_map(cmap)
-    return distance(polytope, inv_cmap, x)
+
+    # For manifolds
+    if(num_pt_dims ≥  D && num_pt_dims ≥ 3)
+      # Check for 3D distance
+      n = evaluate(cell_normal[cell], inv_cmap(x));
+      p₀ = cell_coords[cell][1] # Point on the cell
+      # If proj is not zero, then point is outside cell (return 1), else check for location in the reference polygon (return distance in polytope)
+      proj = abs((p₀-x)⋅n)
+      proj ≤ 1000eps(T) ? distance(polytope, inv_cmap, x) : 1
+    else
+      return distance(polytope, inv_cmap, x)
+    end
+
   end
   # findmin, without allocating an array
   cell = zero(eltype(cells))
@@ -372,13 +387,13 @@ function evaluate!(cache,f::CellField,point_to_x::AbstractVector{<:Point})
 end
 
 function compute_cell_points_from_vector_of_points(xs::AbstractVector{<:Point}, trian::Triangulation, domain_style::PhysicalDomain)
-    cache1 = _point_to_cell_cache(trian)
-    x_to_cell(x) = _point_to_cell!(cache1, x)
-    point_to_cell = map(x_to_cell, xs)
-    ncells = num_cells(trian)
-    cell_to_points, point_to_lpoint = make_inverse_table(point_to_cell, ncells)
-    cell_to_xs = lazy_map(Broadcasting(Reindex(xs)), cell_to_points)
-    cell_point_xs = CellPoint(cell_to_xs, trian, PhysicalDomain())
+  cache1 = _point_to_cell_cache(trian)
+  x_to_cell(x) = _point_to_cell!(cache1, x)
+  point_to_cell = map(x_to_cell, xs)
+  ncells = num_cells(trian)
+  cell_to_points, point_to_lpoint = make_inverse_table(point_to_cell, ncells)
+  cell_to_xs = lazy_map(Broadcasting(Reindex(xs)), cell_to_points)
+  cell_point_xs = CellPoint(cell_to_xs, trian, PhysicalDomain())
 end
 
 (a::CellField)(x) = evaluate(a,x)
@@ -490,9 +505,9 @@ struct OperationCellField{DS} <: CellField
     if num_cells(trian)>0
       x = _get_cell_points(args...)
       try
-         ax = map(i->i(x),args)
-         axi = map(first,ax)
-         r = Fields.BroadcastingFieldOpMap(op.op)(axi...)
+        ax = map(i->i(x),args)
+        axi = map(first,ax)
+        r = Fields.BroadcastingFieldOpMap(op.op)(axi...)
       catch
         @unreachable """\n
         It is not possible to perform the operation "$(op.op)" on the given cell fields.
