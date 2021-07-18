@@ -263,8 +263,13 @@ function _point_to_cell_cache(trian::Triangulation)
   ctype_to_reffe = get_reffes(trian)
   ctype_to_polytope = map(get_polytope, ctype_to_reffe)
   cell_map = get_cell_map(trian)
-  cell_normal = get_data(get_normal_vector(trian)) # To return something else
   cell_coords = get_cell_coordinates(trian)
+
+  if(num_pt_dims > D)
+    cell_normal = get_data(get_normal_vector(trian)) # To return something else
+  else
+    cell_normal = cell_coords
+  end
   cache1 = kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map, cell_normal, cell_coords, num_pt_dims, D
 end
 
@@ -294,7 +299,7 @@ function _point_to_cell!(cache, x::Point)
     inv_cmap = inverse_map(cmap)
 
     # For manifolds
-    if(num_pt_dims ≥  D)
+    if(num_pt_dims >  D)
       # Check for 3D distance
       n = evaluate(cell_normal[cell], inv_cmap(x));
       p₀ = cell_coords[cell][1] # Point on the cell
@@ -369,7 +374,8 @@ end
 # Efficient version:
 function evaluate!(cache,f::CellField,point_to_x::AbstractVector{<:Point})
   cache1,cache2 = cache
-  kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map = cache1
+  kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map, cell_normal, cell_coords, num_pt_dims, D = cache1
+
   cell_f_cache, f_cache, cell_f, f₀ = cache2
   @check f === f₀ "Wrong cache"
 
