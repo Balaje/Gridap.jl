@@ -263,7 +263,7 @@ function _point_to_cell_cache(trian::Triangulation)
   ctype_to_reffe = get_reffes(trian)
   ctype_to_polytope = map(get_polytope, ctype_to_reffe)
   cell_map = get_cell_map(trian)
-  cell_normal = (num_pt_dims ≥ 3) ? get_data(get_normal_vector(trian)) : cell_map # To return something else
+  cell_normal = get_data(get_normal_vector(trian)) # To return something else
   cell_coords = get_cell_coordinates(trian)
   cache1 = kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map, cell_normal, cell_coords, num_pt_dims, D
 end
@@ -294,7 +294,7 @@ function _point_to_cell!(cache, x::Point)
     inv_cmap = inverse_map(cmap)
 
     # For manifolds
-    if(num_pt_dims ≥  D && num_pt_dims ≥ 3)
+    if(num_pt_dims ≥  D)
       # Check for 3D distance
       n = evaluate(cell_normal[cell], inv_cmap(x));
       p₀ = cell_coords[cell][1] # Point on the cell
@@ -304,7 +304,6 @@ function _point_to_cell!(cache, x::Point)
     else
       return distance(polytope, inv_cmap, x)
     end
-
   end
   # findmin, without allocating an array
   cell = zero(eltype(cells))
