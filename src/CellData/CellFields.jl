@@ -257,43 +257,45 @@ function distance(polytope::ExtrusionPolytope, inv_cmap::Field, x::Point)
 end
 
 function _point_to_cell!(cache, x::Point)
-  searchmethod, kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map, table_cache = cache
+  searchmethod, max_iter, kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map, table_cache = cache
 
   # Loop over the first m.num_nearest_vertex
-  for (id,dist) in zip(knn(kdtree, SVector(Tuple(x)), searchmethod.num_nearest_vertices, true)...)
+  for i in 0:max_iter-1
+    for (id,dist) in zip(knn(kdtree, SVector(Tuple(x)), searchmethod.num_nearest_vertices+i, true)...)
 
-    # Find all neighbouring cells
-    cells = getindex!(table_cache,vertex_to_cells,id)
-    @assert !isempty(cells)
+      # Find all neighbouring cells
+      cells = getindex!(table_cache,vertex_to_cells,id)
+      @assert !isempty(cells)
 
-    # Calculate the distance from the point to all the cells. Without
-    # round-off, and with non-overlapping cells, the distance would be
-    # negative for exactly one cell and positive for all other ones. Due
-    # to round-off, the distance can be slightly negative or slightly
-    # positive for points near cell boundaries, in particular near
-    # vertices. In this case, choose the cell with the smallest
-    # distance, and check that the distance (if positive) is at most at
-    # round-off level.
-    T = eltype(dist)
-    function cell_distance(cell::Integer)
-      ctype = cell_to_ctype[cell]
-      polytope = ctype_to_polytope[ctype]
-      cmap = cell_map[cell]
-      inv_cmap = inverse_map(cmap)
-      return distance(polytope, inv_cmap, x)
-    end
-    # findmin, without allocating an array
-    cell = zero(eltype(cells))
-    dist = T(Inf)
-    for jcell in cells
-      jdist = cell_distance(jcell)
-      if jdist < dist
-        cell = jcell
-        dist = jdist
+      # Calculate the distance from the point to all the cells. Without
+      # round-off, and with non-overlapping cells, the distance would be
+      # negative for exactly one cell and positive for all other ones. Due
+      # to round-off, the distance can be slightly negative or slightly
+      # positive for points near cell boundaries, in particular near
+      # vertices. In this case, choose the cell with the smallest
+      # distance, and check that the distance (if positive) is at most at
+      # round-off level.
+      T = eltype(dist)
+      function cell_distance(cell::Integer)
+        ctype = cell_to_ctype[cell]
+        polytope = ctype_to_polytope[ctype]
+        cmap = cell_map[cell]
+        inv_cmap = inverse_map(cmap)
+        return distance(polytope, inv_cmap, x)
       end
-    end
+      # findmin, without allocating an array
+      cell = zero(eltype(cells))
+      dist = T(Inf)
+      for jcell in cells
+        jdist = cell_distance(jcell)
+        if jdist < dist
+          cell = jcell
+          dist = jdist
+        end
+      end
 
-    dist ≤ 1000eps(T) && return cell
+      dist ≤ 1000eps(T) && return cell
+    end
 
   end
 
@@ -349,7 +351,7 @@ end
 # Efficient version:
 function evaluate!(cache,f::CellField,point_to_x::AbstractVector{<:Point})
   cache1,cache2 = cache
-  searchmethod, kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map = cache1
+  searchmethod, max_iter, kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map = cache1
   cell_f_cache, f_cache, cell_f, f₀ = cache2
   @check f === f₀ "Wrong cache"
 
@@ -366,8 +368,10 @@ function evaluate!(cache,f::CellField,point_to_x::AbstractVector{<:Point})
 end
 
 function compute_cell_points_from_vector_of_points(xs::AbstractVector{<:Point}, trian::Triangulation, domain_style::PhysicalDomain)
+  ### May need to incorporate the extended options for searchmethod
     searchmethod = KDTreeSearch()
-    cache1 = _point_to_cell_cache(searchmethod,trian)
+    cache1 = _point_to_cell_cache(searchmethod,trian,1)
+  ###
     x_to_cell(x) = _point_to_cell!(cache1, x)
     point_to_cell = map(x_to_cell, xs)
     ncells = num_cells(trian)
@@ -802,8 +806,9 @@ struct Interpolable{M,A} <: Function
   uh::A
   tol::Float64
   searchmethod::M
-  function Interpolable(uh; tol=1e-6, searchmethod=KDTreeSearch())
-    new{typeof(searchmethod),typeof(uh)}(uh, tol,searchmethod)
+  max_iter::Int
+  function Interpolable(uh; tol=1e-6, searchmethod=KDTreeSearch(), max_iter=1)
+    new{typeof(searchmethod),typeof(uh)}(uh, tol,searchmethod, max_iter)
   end
 end
 
@@ -814,7 +819,7 @@ return_cache(f::CellField,x::Point) = return_cache(Interpolable(f),x)
 function return_cache(a::Interpolable,x::Point)
   f = a.uh
   trian = get_triangulation(f)
-  cache1 = _point_to_cell_cache(a.searchmethod,trian)
+  cache1 = _point_to_cell_cache(a.searchmethod,trian,a.max_iter)
 
   cell_f = get_array(f)
   cell_f_cache = array_cache(cell_f)
@@ -825,7 +830,7 @@ function return_cache(a::Interpolable,x::Point)
   return cache1,cache2
 end
 
-function _point_to_cell_cache(searchmethod::KDTreeSearch,trian::Triangulation)
+function _point_to_cell_cache(searchmethod::KDTreeSearch,trian::Triangulation,max_iter::Int)
   model = get_active_model(trian)
   topo = get_grid_topology(model)
   vertex_coordinates = Geometry.get_vertex_coordinates(topo)
@@ -837,5 +842,5 @@ function _point_to_cell_cache(searchmethod::KDTreeSearch,trian::Triangulation)
   ctype_to_polytope = map(get_polytope, ctype_to_reffe)
   cell_map = get_cell_map(trian)
   table_cache = array_cache(vertex_to_cells)
-  cache1 = searchmethod, kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map, table_cache
+  cache1 = searchmethod, max_iter, kdtree, vertex_to_cells, cell_to_ctype, ctype_to_polytope, cell_map, table_cache
 end

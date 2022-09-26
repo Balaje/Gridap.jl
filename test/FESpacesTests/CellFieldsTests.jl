@@ -157,6 +157,11 @@ source_model = CartesianDiscreteModel((0,1,0,1),(2,2))
   sm=KDTreeSearch(num_nearest_vertices=2)
   ux = Interpolable(u;searchmethod=sm)(x)
   @test ux == 0.9
+  ## New test to check for the max_iter variable
+  ## NOTE: Pass an empty KDTreeSearch() without the num_nearest_vertices
+  ##       and let max_iter take care
+  ux = Interpolable(u;searchmethod=KDTreeSearch(),max_iter=3)(x)
+  @test ux == 0.9
 end
 
 @testset "Test interpolation RT" begin
